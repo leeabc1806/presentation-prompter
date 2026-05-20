@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Mic,
@@ -383,7 +383,13 @@ function getAudioFileExtension(mimeType) {
   return "audio";
 }
 
+function getSpeechRecognitionConstructor() {
+  if (typeof window === "undefined") return null;
+  return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+}
+
 export default function PresentationScriptPracticeApp() {
+  const SpeechRecognition = getSpeechRecognitionConstructor();
   const [title, setTitle] = useState("나의 발표 대본");
   const [script, setScript] = useState(SAMPLE_SCRIPT);
   const [sentenceItems, setSentenceItems] = useState([]);
@@ -395,12 +401,12 @@ export default function PresentationScriptPracticeApp() {
   const [isPaused, setIsPaused] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [interimTranscript, setInterimTranscript] = useState("");
-  const [supportStatus, setSupportStatus] = useState("checking");
+  const [supportStatus, setSupportStatus] = useState(() => (getSpeechRecognitionConstructor() ? "supported" : "unsupported"));
   const [threshold, setThreshold] = useState(0.7);
   const [fontSize, setFontSize] = useState(34);
   const [lineHeight, setLineHeight] = useState(1.55);
   const [darkMode, setDarkMode] = useState(true);
-  const [projects, setProjects] = useState([]);
+  const [projects, setProjects] = useState(() => loadProjects());
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [wakeLockStatus, setWakeLockStatus] = useState("idle");
   const [lastScore, setLastScore] = useState(0);
@@ -423,6 +429,9 @@ export default function PresentationScriptPracticeApp() {
 
   const recognitionRef = useRef(null);
   const wakeLockRef = useRef(null);
+  const modeRef = useRef("edit");
+  const advanceByRef = useRef(null);
+  const togglePauseRef = useRef(null);
   const currentIndexRef = useRef(0);
   const sentenceItemsRef = useRef([]);
   const importantMapRef = useRef({});
@@ -440,7 +449,6 @@ export default function PresentationScriptPracticeApp() {
   const mediaStreamRef = useRef(null);
   const recordingMimeTypeRef = useRef("");
 
-  const SpeechRecognition = typeof window !== "undefined" ? window.SpeechRecognition || window.webkitSpeechRecognition : null;
   const editorItems = useMemo(() => parseScriptToItems(script), [script]);
   const activeItems = sentenceItems.length ? sentenceItems : editorItems;
   const activeSentences = activeItems.map((item) => item.text);
@@ -493,9 +501,8 @@ export default function PresentationScriptPracticeApp() {
   const stageIsNotes = stageLayout === "notes";
 
   useEffect(() => {
-    setProjects(loadProjects());
-    setSupportStatus(SpeechRecognition ? "supported" : "unsupported");
-  }, []);
+    modeRef.current = mode;
+  }, [mode]);
 
   useEffect(() => {
     currentIndexRef.current = currentIndex;
@@ -523,17 +530,17 @@ export default function PresentationScriptPracticeApp() {
 
   useEffect(() => {
     const onKeyDown = (event) => {
-      if (mode !== "practice") return;
-      if (event.key === "ArrowRight" || event.key === "PageDown") advanceBy(1);
-      if (event.key === "ArrowLeft" || event.key === "PageUp") advanceBy(-1);
+      if (modeRef.current !== "practice") return;
+      if (event.key === "ArrowRight" || event.key === "PageDown") advanceByRef.current?.(1);
+      if (event.key === "ArrowLeft" || event.key === "PageUp") advanceByRef.current?.(-1);
       if (event.key === " ") {
         event.preventDefault();
-        togglePause();
+        togglePauseRef.current?.();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [mode]);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -639,8 +646,14 @@ export default function PresentationScriptPracticeApp() {
       recordingChunksRef.current = [];
 
       const mimeType = getBestAudioMimeType();
-      recordingMimeTypeRef.current = mimeType;
-      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      let recorder;
+      try {
+        recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+        recordingMimeTypeRef.current = mimeType;
+      } catch {
+        recorder = new MediaRecorder(stream);
+        recordingMimeTypeRef.current = recorder.mimeType || "";
+      }
       mediaRecorderRef.current = recorder;
       recorder.ondataavailable = (event) => {
         if (event.data && event.data.size > 0) recordingChunksRef.current.push(event.data);
@@ -670,10 +683,14 @@ export default function PresentationScriptPracticeApp() {
         setIsRecording(false);
         setRecordingStatus("saved");
       };
-      recorder.start();
+      recorder.start(1000);
       setIsRecording(true);
       setRecordingStatus("recording");
     } catch {
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+        mediaStreamRef.current = null;
+      }
       setRecordingStatus("blocked");
       setIsRecording(false);
     }
@@ -842,16 +859,19 @@ export default function PresentationScriptPracticeApp() {
       if (next) {
         stopListening();
         pausePracticeTimer();
-        if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") mediaRecorderRef.current.pause();
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording" && typeof mediaRecorderRef.current.pause === "function") mediaRecorderRef.current.pause();
       } else {
         startPracticeTimer(false);
         currentSentenceStartedAtRef.current = Date.now();
-        if (mediaRecorderRef.current && mediaRecorderRef.current.state === "paused") mediaRecorderRef.current.resume();
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state === "paused" && typeof mediaRecorderRef.current.resume === "function") mediaRecorderRef.current.resume();
         setTimeout(() => startListening(), 150);
       }
       return next;
     });
   }
+
+  advanceByRef.current = advanceBy;
+  togglePauseRef.current = togglePause;
 
   function resetCurrentSentence() {
     resetTranscriptOnly();
