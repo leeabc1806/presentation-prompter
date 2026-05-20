@@ -13,6 +13,10 @@ import {
   FileText,
   Moon,
   Sun,
+  User,
+  LogIn,
+  LogOut,
+  Cloud,
   Settings,
   Clock,
   CheckCircle2,
@@ -31,10 +35,13 @@ import {
   Volume2,
   Square,
 } from "lucide-react";
+import { isSupabaseConfigured, supabase } from "./supabaseClient";
 
 const STORAGE_KEY = "karaoke-prompter-projects-v3";
+const RECORDINGS_BUCKET = "presentation-recordings";
 const LINE_BREAK = String.fromCharCode(10);
 const NORMAL_UNITS_PER_SECOND = 4.2;
+const AUTO_ADVANCE_DELAY_MS = 800;
 
 const SAMPLE_SCRIPT = [
   "# 도입",
@@ -219,6 +226,68 @@ function saveProjects(projects) {
     return false;
   }
   return true;
+}
+
+function projectToRow(project, userId) {
+  return {
+    id: project.id,
+    user_id: userId,
+    title: project.title,
+    script: project.script,
+    important_map: project.importantMap || {},
+    settings: {
+      targetMinutes: project.targetMinutes,
+      targetSeconds: project.targetSeconds,
+      threshold: project.threshold,
+      fontSize: project.fontSize,
+      lineHeight: project.lineHeight,
+      practiceTheme: project.practiceTheme,
+      highlightStyle: project.highlightStyle,
+      showNextSentence: project.showNextSentence,
+      showTranscriptBox: project.showTranscriptBox,
+      showTimeCoach: project.showTimeCoach,
+      stageLayout: project.stageLayout,
+      recordEnabled: project.recordEnabled,
+    },
+    updated_at: project.updatedAt,
+  };
+}
+
+function rowToProject(row) {
+  const settings = row.settings || {};
+  return {
+    id: row.id,
+    title: row.title,
+    script: row.script,
+    importantMap: row.important_map || {},
+    targetMinutes: settings.targetMinutes ?? 3,
+    targetSeconds: settings.targetSeconds ?? 0,
+    threshold: settings.threshold ?? 0.7,
+    fontSize: settings.fontSize ?? 34,
+    lineHeight: settings.lineHeight ?? 1.55,
+    practiceTheme: settings.practiceTheme || "dark",
+    highlightStyle: settings.highlightStyle || "karaoke",
+    showNextSentence: settings.showNextSentence ?? true,
+    showTranscriptBox: settings.showTranscriptBox ?? true,
+    showTimeCoach: settings.showTimeCoach ?? true,
+    stageLayout: settings.stageLayout || "coach",
+    recordEnabled: settings.recordEnabled ?? false,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToRecording(row, url) {
+  return {
+    id: row.id,
+    title: row.title,
+    url,
+    storagePath: row.storage_path,
+    mimeType: row.mime_type,
+    extension: row.extension,
+    seconds: row.seconds,
+    createdAt: row.created_at,
+    cloud: true,
+  };
 }
 
 function shortenSentenceText(sentence) {
@@ -426,6 +495,12 @@ export default function PresentationScriptPracticeApp() {
   const [isRecording, setIsRecording] = useState(false);
   const [recordingStatus, setRecordingStatus] = useState("idle");
   const [recordings, setRecordings] = useState([]);
+  const [user, setUser] = useState(null);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authMode, setAuthMode] = useState("signin");
+  const [authStatus, setAuthStatus] = useState("");
+  const [cloudStatus, setCloudStatus] = useState(isSupabaseConfigured ? "로그인하면 클라우드 저장을 사용할 수 있습니다." : "Supabase 환경변수가 없어 로컬 저장만 사용 중입니다.");
 
   const recognitionRef = useRef(null);
   const wakeLockRef = useRef(null);
@@ -444,6 +519,7 @@ export default function PresentationScriptPracticeApp() {
   const accumulatedElapsedRef = useRef(0);
   const currentSentenceStartedAtRef = useRef(null);
   const lastAdvanceRef = useRef(0);
+  const pendingAdvanceTimeoutRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const recordingChunksRef = useRef([]);
   const mediaStreamRef = useRef(null);
@@ -503,6 +579,29 @@ export default function PresentationScriptPracticeApp() {
   useEffect(() => {
     modeRef.current = mode;
   }, [mode]);
+
+  useEffect(() => {
+    if (!supabase) return undefined;
+
+    let mounted = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (mounted) setUser(data.session?.user || null);
+    });
+
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user || null);
+    });
+
+    return () => {
+      mounted = false;
+      data.subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!user || !supabase) return;
+    loadCloudData(user.id);
+  }, [user]);
 
   useEffect(() => {
     currentIndexRef.current = currentIndex;
@@ -567,9 +666,17 @@ export default function PresentationScriptPracticeApp() {
   }
 
   function resetTranscriptOnly() {
+    clearPendingAdvance();
     transcriptRef.current = "";
     setTranscript("");
     setInterimTranscript("");
+  }
+
+  function clearPendingAdvance() {
+    if (pendingAdvanceTimeoutRef.current) {
+      clearTimeout(pendingAdvanceTimeoutRef.current);
+      pendingAdvanceTimeoutRef.current = null;
+    }
   }
 
   function getLiveElapsedSeconds() {
@@ -634,6 +741,125 @@ export default function PresentationScriptPracticeApp() {
     }
   }
 
+  async function handleAuthSubmit(event) {
+    event.preventDefault();
+    if (!supabase) {
+      setAuthStatus("Supabase 환경변수가 필요합니다.");
+      return;
+    }
+
+    setAuthStatus(authMode === "signin" ? "로그인 중..." : "계정 생성 중...");
+    const credentials = { email: authEmail.trim(), password: authPassword };
+    const { error } = authMode === "signin"
+      ? await supabase.auth.signInWithPassword(credentials)
+      : await supabase.auth.signUp(credentials);
+
+    if (error) {
+      setAuthStatus(error.message);
+      return;
+    }
+
+    setAuthPassword("");
+    setAuthStatus(authMode === "signin" ? "로그인되었습니다." : "가입 요청이 완료되었습니다. 이메일 확인 설정이 켜져 있다면 메일을 확인하세요.");
+  }
+
+  async function handleSignOut() {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+    setUser(null);
+    setProjects(loadProjects());
+    setRecordings([]);
+    setSelectedProjectId("");
+    setCloudStatus("로그아웃했습니다. 로컬 저장 목록을 표시합니다.");
+  }
+
+  async function loadCloudData(userId) {
+    if (!supabase) return;
+    setCloudStatus("클라우드 데이터를 불러오는 중...");
+
+    const { data: projectRows, error: projectError } = await supabase
+      .from("presentation_projects")
+      .select("*")
+      .eq("user_id", userId)
+      .order("updated_at", { ascending: false });
+
+    if (projectError) {
+      setCloudStatus(`대본 불러오기 실패: ${projectError.message}`);
+      return;
+    }
+
+    const cloudProjects = (projectRows || []).map(rowToProject);
+    setProjects(cloudProjects);
+
+    const { data: recordingRows, error: recordingError } = await supabase
+      .from("presentation_recordings")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(20);
+
+    if (recordingError) {
+      setCloudStatus(`녹음 불러오기 실패: ${recordingError.message}`);
+      return;
+    }
+
+    const recordingList = await Promise.all((recordingRows || []).map(async (row) => {
+      const { data } = await supabase.storage
+        .from(RECORDINGS_BUCKET)
+        .createSignedUrl(row.storage_path, 60 * 60);
+      return rowToRecording(row, data?.signedUrl || "");
+    }));
+
+    setRecordings(recordingList);
+    setCloudStatus("클라우드 데이터가 동기화되었습니다.");
+  }
+
+  async function saveProjectToCloud(project) {
+    if (!supabase || !user) return true;
+    const { error } = await supabase
+      .from("presentation_projects")
+      .upsert(projectToRow(project, user.id), { onConflict: "id" });
+    if (error) {
+      setCloudStatus(`클라우드 저장 실패: ${error.message}`);
+      return false;
+    }
+    setCloudStatus("클라우드에 저장되었습니다.");
+    return true;
+  }
+
+  async function saveRecordingToCloud(recording, blob) {
+    if (!supabase || !user) return;
+
+    const storagePath = `${user.id}/${recording.id}.${recording.extension}`;
+    const { error: uploadError } = await supabase.storage
+      .from(RECORDINGS_BUCKET)
+      .upload(storagePath, blob, { contentType: recording.mimeType, upsert: false });
+
+    if (uploadError) {
+      setCloudStatus(`녹음 업로드 실패: ${uploadError.message}`);
+      return;
+    }
+
+    const { error: insertError } = await supabase.from("presentation_recordings").insert({
+      id: recording.id,
+      user_id: user.id,
+      project_id: projects.some((project) => project.id === selectedProjectId) ? selectedProjectId : null,
+      title: recording.title,
+      storage_path: storagePath,
+      mime_type: recording.mimeType,
+      extension: recording.extension,
+      seconds: recording.seconds,
+      created_at: recording.createdAt,
+    });
+
+    if (insertError) {
+      setCloudStatus(`녹음 기록 저장 실패: ${insertError.message}`);
+      return;
+    }
+
+    setCloudStatus("녹음이 클라우드에 저장되었습니다.");
+  }
+
   async function startRecording() {
     if (!recordEnabled) return;
     if (!navigator.mediaDevices || !window.MediaRecorder) {
@@ -658,23 +884,26 @@ export default function PresentationScriptPracticeApp() {
       recorder.ondataavailable = (event) => {
         if (event.data && event.data.size > 0) recordingChunksRef.current.push(event.data);
       };
-      recorder.onstop = () => {
+      recorder.onstop = async () => {
         const recordedType = recordingMimeTypeRef.current || recordingChunksRef.current[0]?.type || "audio/mp4";
         const blob = new Blob(recordingChunksRef.current, { type: recordedType });
         if (blob.size > 0) {
           const url = URL.createObjectURL(blob);
+          const recording = {
+            id: createId(),
+            title,
+            url,
+            mimeType: recordedType,
+            extension: getAudioFileExtension(recordedType),
+            seconds: getLiveElapsedSeconds(),
+            createdAt: new Date().toISOString(),
+            cloud: false,
+          };
           setRecordings((prev) => [
-            {
-              id: createId(),
-              title,
-              url,
-              mimeType: recordedType,
-              extension: getAudioFileExtension(recordedType),
-              seconds: getLiveElapsedSeconds(),
-              createdAt: new Date().toISOString(),
-            },
+            recording,
             ...prev,
-          ].slice(0, 5));
+          ].slice(0, user ? 20 : 5));
+          await saveRecordingToCloud(recording, blob);
         }
         if (mediaStreamRef.current) {
           mediaStreamRef.current.getTracks().forEach((track) => track.stop());
@@ -791,6 +1020,7 @@ export default function PresentationScriptPracticeApp() {
 
   function stopListening() {
     shouldListenRef.current = false;
+    clearPendingAdvance();
     try {
       recognitionRef.current?.stop();
     } catch {
@@ -838,10 +1068,16 @@ export default function PresentationScriptPracticeApp() {
     const spokenLength = countSpeechUnits(spoken);
     const lengthEnough = spokenLength >= Math.min(targetLength * 0.55, Math.max(1, targetLength - 2));
     if (score >= threshold && lengthEnough && Date.now() - lastAdvanceRef.current > 1100) {
-      lastAdvanceRef.current = Date.now();
-      setTimeout(() => {
-        if (currentIndexRef.current === idx) advanceBy(1);
-      }, 420);
+      clearPendingAdvance();
+      pendingAdvanceTimeoutRef.current = setTimeout(() => {
+        pendingAdvanceTimeoutRef.current = null;
+        if (currentIndexRef.current === idx && !pausedRef.current && autoAdvanceRef.current) {
+          lastAdvanceRef.current = Date.now();
+          advanceBy(1);
+        }
+      }, AUTO_ADVANCE_DELAY_MS);
+    } else {
+      clearPendingAdvance();
     }
   }
 
@@ -890,7 +1126,7 @@ export default function PresentationScriptPracticeApp() {
     setMode("report");
   }
 
-  function saveCurrentProject() {
+  async function saveCurrentProject() {
     const project = {
       id: selectedProjectId || createId(),
       title: title.trim() || "제목 없는 발표",
@@ -914,6 +1150,7 @@ export default function PresentationScriptPracticeApp() {
     setProjects(nextProjects);
     setSelectedProjectId(project.id);
     saveProjects(nextProjects);
+    await saveProjectToCloud(project);
   }
 
   function loadProject(id) {
@@ -939,11 +1176,15 @@ export default function PresentationScriptPracticeApp() {
     setCurrentIndex(0);
   }
 
-  function deleteProject(id) {
+  async function deleteProject(id) {
     const nextProjects = projects.filter((item) => item.id !== id);
     setProjects(nextProjects);
     saveProjects(nextProjects);
     if (selectedProjectId === id) setSelectedProjectId("");
+    if (supabase && user) {
+      const { error } = await supabase.from("presentation_projects").delete().eq("id", id).eq("user_id", user.id);
+      setCloudStatus(error ? `클라우드 삭제 실패: ${error.message}` : "클라우드에서 삭제되었습니다.");
+    }
   }
 
   function toggleImportant(index) {
@@ -1222,6 +1463,32 @@ export default function PresentationScriptPracticeApp() {
 
           <aside className="space-y-5">
             <section className={`${cardClass} p-5 sm:p-6`}>
+              <div className="mb-4 flex items-center gap-2"><Cloud className="h-5 w-5 text-sky-300" /><h2 className="text-xl font-bold">계정 동기화</h2></div>
+              {!isSupabaseConfigured ? (
+                <p className={darkMode ? "text-sm text-slate-400" : "text-sm text-slate-500"}>VITE_SUPABASE_URL과 VITE_SUPABASE_ANON_KEY를 설정하면 계정별 대본과 녹음을 저장할 수 있습니다.</p>
+              ) : user ? (
+                <div className="space-y-3">
+                  <div className={darkMode ? "rounded-2xl bg-white/10 p-4" : "rounded-2xl bg-slate-100 p-4"}>
+                    <div className="flex items-center gap-2"><User className="h-4 w-4" /><p className="truncate text-sm font-bold">{user.email}</p></div>
+                    <p className={darkMode ? "mt-2 text-xs text-slate-400" : "mt-2 text-xs text-slate-500"}>{cloudStatus}</p>
+                  </div>
+                  <button onClick={handleSignOut} className={darkMode ? "inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-white/10 px-4 py-3 font-bold active:scale-95" : "inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-200 px-4 py-3 font-bold active:scale-95"}><LogOut className="h-4 w-4" /> 로그아웃</button>
+                </div>
+              ) : (
+                <form onSubmit={handleAuthSubmit} className="space-y-3">
+                  <div className="grid grid-cols-2 gap-2">
+                    <ModeButton active={authMode === "signin"} onClick={() => setAuthMode("signin")} label="로그인" />
+                    <ModeButton active={authMode === "signup"} onClick={() => setAuthMode("signup")} label="회원가입" />
+                  </div>
+                  <input type="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} className={darkMode ? "w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 outline-none focus:border-yellow-300" : "w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none focus:border-yellow-400"} placeholder="이메일" autoComplete="email" required />
+                  <input type="password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} className={darkMode ? "w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 outline-none focus:border-yellow-300" : "w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none focus:border-yellow-400"} placeholder="비밀번호" autoComplete={authMode === "signin" ? "current-password" : "new-password"} required minLength={6} />
+                  <button type="submit" className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-yellow-300 px-4 py-3 font-black text-slate-950 active:scale-95"><LogIn className="h-4 w-4" /> {authMode === "signin" ? "로그인" : "계정 만들기"}</button>
+                  {(authStatus || cloudStatus) && <p className={darkMode ? "text-xs text-slate-400" : "text-xs text-slate-500"}>{authStatus || cloudStatus}</p>}
+                </form>
+              )}
+            </section>
+
+            <section className={`${cardClass} p-5 sm:p-6`}>
               <div className="mb-4 flex items-center gap-2"><Settings className="h-5 w-5" /><h2 className="text-xl font-bold">2. 연습 설정</h2></div>
               <div className="space-y-5">
                 <div className={darkMode ? "rounded-2xl bg-white/10 p-4" : "rounded-2xl bg-slate-100 p-4"}>
@@ -1279,6 +1546,11 @@ export default function PresentationScriptPracticeApp() {
             <section className={`${cardClass} p-5 sm:p-6`}>
               <h2 className="mb-4 text-xl font-bold">저장한 대본</h2>
               {projects.length === 0 ? <p className={darkMode ? "text-sm text-slate-400" : "text-sm text-slate-500"}>아직 저장된 대본이 없습니다.</p> : <div className="space-y-2">{projects.map((project) => <div key={project.id} className={darkMode ? "flex items-center gap-2 rounded-2xl bg-white/10 p-3" : "flex items-center gap-2 rounded-2xl bg-slate-100 p-3"}><button onClick={() => loadProject(project.id)} className="min-w-0 flex-1 text-left"><p className="truncate font-semibold">{project.title}</p><p className={darkMode ? "text-xs text-slate-400" : "text-xs text-slate-500"}>{new Date(project.updatedAt).toLocaleString("ko-KR")}</p></button><button onClick={() => deleteProject(project.id)} className="rounded-xl p-2 text-rose-400 active:scale-95" aria-label="대본 삭제"><Trash2 className="h-4 w-4" /></button></div>)}</div>}
+            </section>
+
+            <section className={`${cardClass} p-5 sm:p-6`}>
+              <div className="mb-4 flex items-center gap-2"><Volume2 className="h-5 w-5" /><h2 className="text-xl font-bold">저장한 녹음</h2></div>
+              {recordings.length === 0 ? <p className={darkMode ? "text-sm text-slate-400" : "text-sm text-slate-500"}>아직 저장된 녹음이 없습니다.</p> : <div className="space-y-3">{recordings.map((recording) => <div key={recording.id} className={darkMode ? "rounded-2xl bg-white/10 p-4" : "rounded-2xl bg-slate-100 p-4"}><p className="mb-2 truncate text-sm font-bold">{recording.title} · {formatTime(recording.seconds)} · {recording.extension || "audio"}</p><p className={darkMode ? "mb-2 text-xs text-slate-400" : "mb-2 text-xs text-slate-500"}>{new Date(recording.createdAt).toLocaleString("ko-KR")}{recording.cloud ? " · 클라우드" : " · 이 기기"}</p>{recording.url ? <audio controls src={recording.url} className="w-full" /> : <p className="text-xs text-rose-300">재생 URL을 만들 수 없습니다.</p>}</div>)}</div>}
             </section>
           </aside>
         </div>
