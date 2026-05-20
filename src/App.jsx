@@ -347,6 +347,42 @@ function getSectionSummary(items) {
   return sections;
 }
 
+function getBestAudioMimeType() {
+  if (typeof window === "undefined" || !window.MediaRecorder) return "";
+
+  const candidates = [
+    "audio/mp4;codecs=mp4a.40.2",
+    "audio/mp4",
+    "audio/aac",
+    "audio/webm;codecs=opus",
+    "audio/webm",
+  ];
+
+  const testAudio = typeof document !== "undefined" ? document.createElement("audio") : null;
+
+  const supported = candidates.filter((type) => {
+    try {
+      return window.MediaRecorder.isTypeSupported(type);
+    } catch {
+      return false;
+    }
+  });
+
+  const playable = supported.find((type) => {
+    if (!testAudio || !testAudio.canPlayType) return true;
+    return testAudio.canPlayType(type).length > 0;
+  });
+
+  return playable || supported[0] || "";
+}
+
+function getAudioFileExtension(mimeType) {
+  if (mimeType.includes("mp4")) return "m4a";
+  if (mimeType.includes("aac")) return "aac";
+  if (mimeType.includes("webm")) return "webm";
+  return "audio";
+}
+
 export default function PresentationScriptPracticeApp() {
   const [title, setTitle] = useState("나의 발표 대본");
   const [script, setScript] = useState(SAMPLE_SCRIPT);
@@ -402,6 +438,7 @@ export default function PresentationScriptPracticeApp() {
   const mediaRecorderRef = useRef(null);
   const recordingChunksRef = useRef([]);
   const mediaStreamRef = useRef(null);
+  const recordingMimeTypeRef = useRef("");
 
   const SpeechRecognition = typeof window !== "undefined" ? window.SpeechRecognition || window.webkitSpeechRecognition : null;
   const editorItems = useMemo(() => parseScriptToItems(script), [script]);
@@ -600,16 +637,31 @@ export default function PresentationScriptPracticeApp() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaStreamRef.current = stream;
       recordingChunksRef.current = [];
-      const recorder = new MediaRecorder(stream);
+
+      const mimeType = getBestAudioMimeType();
+      recordingMimeTypeRef.current = mimeType;
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
       mediaRecorderRef.current = recorder;
       recorder.ondataavailable = (event) => {
         if (event.data && event.data.size > 0) recordingChunksRef.current.push(event.data);
       };
       recorder.onstop = () => {
-        const blob = new Blob(recordingChunksRef.current, { type: "audio/webm" });
+        const recordedType = recordingMimeTypeRef.current || recordingChunksRef.current[0]?.type || "audio/mp4";
+        const blob = new Blob(recordingChunksRef.current, { type: recordedType });
         if (blob.size > 0) {
           const url = URL.createObjectURL(blob);
-          setRecordings((prev) => [{ id: createId(), title, url, seconds: getLiveElapsedSeconds(), createdAt: new Date().toISOString() }, ...prev].slice(0, 5));
+          setRecordings((prev) => [
+            {
+              id: createId(),
+              title,
+              url,
+              mimeType: recordedType,
+              extension: getAudioFileExtension(recordedType),
+              seconds: getLiveElapsedSeconds(),
+              createdAt: new Date().toISOString(),
+            },
+            ...prev,
+          ].slice(0, 5));
         }
         if (mediaStreamRef.current) {
           mediaStreamRef.current.getTracks().forEach((track) => track.stop());
@@ -1094,7 +1146,7 @@ export default function PresentationScriptPracticeApp() {
             <section className={`${cardClass} mt-5 p-5 sm:p-6`}>
               <div className="mb-4 flex items-center gap-2"><Volume2 className="h-5 w-5" /><h2 className="text-xl font-bold">발표 녹음</h2></div>
               <div className="space-y-3">
-                {recordings.map((recording) => <div key={recording.id} className={darkMode ? "rounded-2xl bg-white/10 p-4" : "rounded-2xl bg-slate-100 p-4"}><p className="mb-2 text-sm font-bold">{new Date(recording.createdAt).toLocaleString("ko-KR")} · {formatTime(recording.seconds)}</p><audio controls src={recording.url} className="w-full" /></div>)}
+                {recordings.map((recording) => <div key={recording.id} className={darkMode ? "rounded-2xl bg-white/10 p-4" : "rounded-2xl bg-slate-100 p-4"}><p className="mb-2 text-sm font-bold">{new Date(recording.createdAt).toLocaleString("ko-KR")} · {formatTime(recording.seconds)} · {recording.extension || "audio"}</p><audio controls src={recording.url} className="w-full" /></div>)}
               </div>
             </section>
           )}
