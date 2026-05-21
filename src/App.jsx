@@ -1098,7 +1098,8 @@ export default function PresentationScriptPracticeApp() {
         pendingAdvanceTimeoutRef.current = null;
         if (currentIndexRef.current === idx && !pausedRef.current && autoAdvanceRef.current) {
           lastAdvanceRef.current = Date.now();
-          advanceBy(1);
+          if (idx === list.length - 1) finishPractice();
+          else advanceBy(1);
         }
       }, AUTO_ADVANCE_DELAY_MS);
     } else {
