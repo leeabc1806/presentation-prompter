@@ -16,7 +16,7 @@ import {
   User,
   LogIn,
   LogOut,
-  Cloud,
+  X,
   Settings,
   Clock,
   CheckCircle2,
@@ -499,6 +499,7 @@ export default function PresentationScriptPracticeApp() {
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authMode, setAuthMode] = useState("signin");
+  const [authDialogOpen, setAuthDialogOpen] = useState(false);
   const [authStatus, setAuthStatus] = useState("");
   const [cloudStatus, setCloudStatus] = useState(isSupabaseConfigured ? "로그인하면 클라우드 저장을 사용할 수 있습니다." : "Supabase 환경변수가 없어 로컬 저장만 사용 중입니다.");
 
@@ -590,6 +591,7 @@ export default function PresentationScriptPracticeApp() {
 
     const { data } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user || null);
+      if (session?.user) setAuthDialogOpen(false);
     });
 
     return () => {
@@ -761,6 +763,27 @@ export default function PresentationScriptPracticeApp() {
 
     setAuthPassword("");
     setAuthStatus(authMode === "signin" ? "로그인되었습니다." : "가입 요청이 완료되었습니다. 이메일 확인 설정이 켜져 있다면 메일을 확인하세요.");
+  }
+
+  function openAuthDialog(nextMode) {
+    setAuthMode(nextMode);
+    setAuthStatus("");
+    setAuthDialogOpen(true);
+  }
+
+  async function handleGoogleSignIn() {
+    if (!supabase) {
+      setAuthStatus("Supabase 환경변수가 필요합니다.");
+      return;
+    }
+
+    setAuthStatus("Google 로그인으로 이동합니다...");
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: window.location.origin },
+    });
+
+    if (error) setAuthStatus(error.message);
   }
 
   async function handleSignOut() {
@@ -1439,8 +1462,56 @@ export default function PresentationScriptPracticeApp() {
             <h1 className="text-3xl font-black tracking-tight sm:text-5xl">발표 대본 연습 앱</h1>
             <p className={darkMode ? "mt-3 max-w-2xl text-slate-300" : "mt-3 max-w-2xl text-slate-600"}>대본 강조, 제한시간, 결과 리포트, 녹음, 실전 모드, 태블릿 발표자 노트까지 한 번에 연습할 수 있습니다.</p>
           </div>
-          <button onClick={() => setDarkMode((prev) => !prev)} className={darkMode ? "rounded-2xl bg-white/10 p-4 active:scale-95" : "rounded-2xl bg-slate-200 p-4 active:scale-95"} aria-label="화면 모드 변경">{darkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}</button>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {user ? (
+              <>
+                <span className={darkMode ? "inline-flex max-w-[180px] items-center gap-2 truncate rounded-xl bg-white/10 px-3 py-2 text-xs font-bold text-slate-200" : "inline-flex max-w-[180px] items-center gap-2 truncate rounded-xl bg-slate-200 px-3 py-2 text-xs font-bold text-slate-700"}><User className="h-3.5 w-3.5 shrink-0" /> {user.email}</span>
+                <button onClick={handleSignOut} className={darkMode ? "inline-flex items-center gap-1 rounded-xl bg-white/10 px-3 py-2 text-xs font-bold active:scale-95" : "inline-flex items-center gap-1 rounded-xl bg-slate-200 px-3 py-2 text-xs font-bold active:scale-95"}><LogOut className="h-3.5 w-3.5" /> 로그아웃</button>
+              </>
+            ) : (
+              <>
+                <button onClick={() => openAuthDialog("signin")} className={darkMode ? "rounded-xl bg-white/10 px-3 py-2 text-xs font-bold active:scale-95" : "rounded-xl bg-slate-200 px-3 py-2 text-xs font-bold active:scale-95"}>로그인</button>
+                <button onClick={() => openAuthDialog("signup")} className="rounded-xl bg-yellow-300 px-3 py-2 text-xs font-black text-slate-950 active:scale-95">회원가입</button>
+              </>
+            )}
+            <button onClick={() => setDarkMode((prev) => !prev)} className={darkMode ? "rounded-xl bg-white/10 p-2.5 active:scale-95" : "rounded-xl bg-slate-200 p-2.5 active:scale-95"} aria-label="화면 모드 변경">{darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}</button>
+          </div>
         </header>
+
+        <AnimatePresence>
+          {authDialogOpen && (
+            <motion.div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onMouseDown={() => setAuthDialogOpen(false)}>
+              <motion.section role="dialog" aria-modal="true" aria-labelledby="auth-title" className={darkMode ? "w-full max-w-md rounded-3xl border border-white/10 bg-slate-900 p-5 shadow-2xl shadow-black/50 sm:p-6" : "w-full max-w-md rounded-3xl border border-slate-200 bg-white p-5 shadow-2xl shadow-slate-400/30 sm:p-6"} initial={{ opacity: 0, y: 18, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.98 }} onMouseDown={(event) => event.stopPropagation()}>
+                <div className="mb-5 flex items-start justify-between gap-3">
+                  <div>
+                    <h2 id="auth-title" className="text-2xl font-black">{authMode === "signin" ? "로그인" : "회원가입"}</h2>
+                    <p className={darkMode ? "mt-1 text-sm text-slate-400" : "mt-1 text-sm text-slate-500"}>대본과 녹음을 계정에 저장합니다.</p>
+                  </div>
+                  <button onClick={() => setAuthDialogOpen(false)} className={darkMode ? "rounded-xl bg-white/10 p-2 active:scale-95" : "rounded-xl bg-slate-100 p-2 active:scale-95"} aria-label="인증 창 닫기"><X className="h-4 w-4" /></button>
+                </div>
+
+                <div className="mb-3 grid grid-cols-2 gap-2">
+                  <ModeButton active={authMode === "signin"} onClick={() => setAuthMode("signin")} label="로그인" />
+                  <ModeButton active={authMode === "signup"} onClick={() => setAuthMode("signup")} label="회원가입" />
+                </div>
+
+                <button type="button" onClick={handleGoogleSignIn} className={darkMode ? "mb-3 inline-flex w-full items-center justify-center gap-3 rounded-2xl border border-white/10 bg-white px-4 py-3 font-bold text-slate-950 active:scale-[0.99]" : "mb-3 inline-flex w-full items-center justify-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 font-bold text-slate-950 shadow-sm active:scale-[0.99]"}>
+                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 text-sm font-black text-blue-600">G</span>
+                  Google로 계속하기
+                </button>
+
+                <form onSubmit={handleAuthSubmit} className="space-y-3">
+                  <input type="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} className={darkMode ? "w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 outline-none focus:border-yellow-300" : "w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none focus:border-yellow-400"} placeholder="이메일" autoComplete="email" required />
+                  <input type="password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} className={darkMode ? "w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 outline-none focus:border-yellow-300" : "w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none focus:border-yellow-400"} placeholder="비밀번호" autoComplete={authMode === "signin" ? "current-password" : "new-password"} required minLength={6} />
+                  <button type="submit" className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-yellow-300 px-4 py-3 font-black text-slate-950 active:scale-[0.99]"><LogIn className="h-4 w-4" /> {authMode === "signin" ? "이메일로 로그인" : "계정 만들기"}</button>
+                </form>
+
+                {!isSupabaseConfigured && <p className="mt-3 text-xs text-rose-300">Supabase 환경변수를 설정해야 로그인할 수 있습니다.</p>}
+                {(authStatus || cloudStatus) && <p className={darkMode ? "mt-3 text-xs text-slate-400" : "mt-3 text-xs text-slate-500"}>{authStatus || cloudStatus}</p>}
+              </motion.section>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         <div className="grid gap-5 lg:grid-cols-[1.4fr_0.9fr]">
           <section className={`${cardClass} p-5 sm:p-7`}>
@@ -1462,32 +1533,6 @@ export default function PresentationScriptPracticeApp() {
           </section>
 
           <aside className="space-y-5">
-            <section className={`${cardClass} p-5 sm:p-6`}>
-              <div className="mb-4 flex items-center gap-2"><Cloud className="h-5 w-5 text-sky-300" /><h2 className="text-xl font-bold">계정 동기화</h2></div>
-              {!isSupabaseConfigured ? (
-                <p className={darkMode ? "text-sm text-slate-400" : "text-sm text-slate-500"}>VITE_SUPABASE_URL과 VITE_SUPABASE_ANON_KEY를 설정하면 계정별 대본과 녹음을 저장할 수 있습니다.</p>
-              ) : user ? (
-                <div className="space-y-3">
-                  <div className={darkMode ? "rounded-2xl bg-white/10 p-4" : "rounded-2xl bg-slate-100 p-4"}>
-                    <div className="flex items-center gap-2"><User className="h-4 w-4" /><p className="truncate text-sm font-bold">{user.email}</p></div>
-                    <p className={darkMode ? "mt-2 text-xs text-slate-400" : "mt-2 text-xs text-slate-500"}>{cloudStatus}</p>
-                  </div>
-                  <button onClick={handleSignOut} className={darkMode ? "inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-white/10 px-4 py-3 font-bold active:scale-95" : "inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-200 px-4 py-3 font-bold active:scale-95"}><LogOut className="h-4 w-4" /> 로그아웃</button>
-                </div>
-              ) : (
-                <form onSubmit={handleAuthSubmit} className="space-y-3">
-                  <div className="grid grid-cols-2 gap-2">
-                    <ModeButton active={authMode === "signin"} onClick={() => setAuthMode("signin")} label="로그인" />
-                    <ModeButton active={authMode === "signup"} onClick={() => setAuthMode("signup")} label="회원가입" />
-                  </div>
-                  <input type="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} className={darkMode ? "w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 outline-none focus:border-yellow-300" : "w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none focus:border-yellow-400"} placeholder="이메일" autoComplete="email" required />
-                  <input type="password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} className={darkMode ? "w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 outline-none focus:border-yellow-300" : "w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none focus:border-yellow-400"} placeholder="비밀번호" autoComplete={authMode === "signin" ? "current-password" : "new-password"} required minLength={6} />
-                  <button type="submit" className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-yellow-300 px-4 py-3 font-black text-slate-950 active:scale-95"><LogIn className="h-4 w-4" /> {authMode === "signin" ? "로그인" : "계정 만들기"}</button>
-                  {(authStatus || cloudStatus) && <p className={darkMode ? "text-xs text-slate-400" : "text-xs text-slate-500"}>{authStatus || cloudStatus}</p>}
-                </form>
-              )}
-            </section>
-
             <section className={`${cardClass} p-5 sm:p-6`}>
               <div className="mb-4 flex items-center gap-2"><Settings className="h-5 w-5" /><h2 className="text-xl font-bold">2. 연습 설정</h2></div>
               <div className="space-y-5">
