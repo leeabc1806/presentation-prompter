@@ -41,7 +41,7 @@ const STORAGE_KEY = "karaoke-prompter-projects-v3";
 const RECORDINGS_BUCKET = "presentation-recordings";
 const LINE_BREAK = String.fromCharCode(10);
 const NORMAL_UNITS_PER_SECOND = 4.2;
-const AUTO_ADVANCE_DELAY_MS = 800;
+const AUTO_ADVANCE_DELAY_MS = 500;
 
 const SAMPLE_SCRIPT = [
   "# 도입",
