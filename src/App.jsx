@@ -562,13 +562,15 @@ export default function PresentationScriptPracticeApp() {
   const matchedCount = useMemo(() => getMatchedTokenCount(currentSentence, combinedTranscript), [currentSentence, combinedTranscript]);
   const timeSuggestion = useMemo(() => buildTimeScriptSuggestion(activeItems, importantMap, targetTimeSeconds), [activeItems, importantMap, targetTimeSeconds]);
 
-  const paceStatus = elapsedSeconds < 5
+  const paceStatus = elapsedSeconds < 5 || !elapsedPace
     ? { label: "측정 중", hint: "읽기 시작하면 제한시간 대비 속도를 계산합니다.", tone: "text-slate-300" }
-    : paceGap < -0.08
-      ? { label: "조금 빠르게", hint: "현재 속도라면 시간이 부족할 수 있어요. 다음 문장은 조금 더 빠르게 읽어보세요.", tone: "text-rose-300" }
-      : paceGap > 0.1
-        ? { label: "여유 있음", hint: "제한시간보다 조금 빠른 편이에요. 중요한 문장은 천천히 말해도 됩니다.", tone: "text-emerald-300" }
-        : { label: "좋은 속도", hint: "현재 속도면 제한시간 안에 발표를 마칠 가능성이 높아요.", tone: "text-yellow-200" };
+    : elapsedSeconds >= targetTimeSeconds
+      ? { label: "시간 초과", hint: "목표 시간이 지났습니다. 남은 문장은 핵심 위주로 마무리하세요.", tone: "text-rose-300" }
+      : estimatedFinishGap > 0
+        ? { label: "속도 올리기", hint: `현재 속도라면 목표보다 ${formatTime(estimatedFinishGap)} 늦게 끝날 수 있어요. 다음 문장은 조금 더 빠르게 읽어보세요.`, tone: "text-rose-300" }
+        : estimatedFinishGap < -Math.max(10, Math.round(targetTimeSeconds * 0.03)) || paceGap > 0.1
+          ? { label: "여유 있음", hint: "목표 시간보다 빠르게 끝날 흐름입니다. 중요한 문장은 천천히 말해도 됩니다.", tone: "text-emerald-300" }
+          : { label: "좋은 속도", hint: "현재 속도면 목표 시간 안에 발표를 마칠 가능성이 높아요.", tone: "text-yellow-200" };
 
   const appClass = darkMode ? "min-h-screen bg-slate-950 text-white" : "min-h-screen bg-slate-50 text-slate-950";
   const cardClass = darkMode ? "rounded-3xl border border-white/10 bg-white/8 shadow-2xl shadow-black/20 backdrop-blur" : "rounded-3xl border border-slate-200 bg-white shadow-xl shadow-slate-200/70";
