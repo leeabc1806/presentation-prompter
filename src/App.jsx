@@ -42,6 +42,7 @@ const RECORDINGS_BUCKET = "presentation-recordings";
 const LINE_BREAK = String.fromCharCode(10);
 const NORMAL_UNITS_PER_SECOND = 4.2;
 const AUTO_ADVANCE_DELAY_MS = 300;
+const AUTO_FINISH_DELAY_MS = 1000;
 
 const SAMPLE_SCRIPT = [
   "# 도입",
@@ -521,6 +522,7 @@ export default function PresentationScriptPracticeApp() {
   const currentSentenceStartedAtRef = useRef(null);
   const lastAdvanceRef = useRef(0);
   const pendingAdvanceTimeoutRef = useRef(null);
+  const pendingFinishTimeoutRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const recordingChunksRef = useRef([]);
   const mediaStreamRef = useRef(null);
@@ -680,6 +682,10 @@ export default function PresentationScriptPracticeApp() {
     if (pendingAdvanceTimeoutRef.current) {
       clearTimeout(pendingAdvanceTimeoutRef.current);
       pendingAdvanceTimeoutRef.current = null;
+    }
+    if (pendingFinishTimeoutRef.current) {
+      clearTimeout(pendingFinishTimeoutRef.current);
+      pendingFinishTimeoutRef.current = null;
     }
   }
 
@@ -1098,8 +1104,14 @@ export default function PresentationScriptPracticeApp() {
         pendingAdvanceTimeoutRef.current = null;
         if (currentIndexRef.current === idx && !pausedRef.current && autoAdvanceRef.current) {
           lastAdvanceRef.current = Date.now();
-          if (idx === list.length - 1) finishPractice();
-          else advanceBy(1);
+          if (idx === list.length - 1) {
+            pendingFinishTimeoutRef.current = setTimeout(() => {
+              pendingFinishTimeoutRef.current = null;
+              if (currentIndexRef.current === idx && !pausedRef.current && autoAdvanceRef.current) finishPractice();
+            }, AUTO_FINISH_DELAY_MS);
+          } else {
+            advanceBy(1);
+          }
         }
       }, AUTO_ADVANCE_DELAY_MS);
     } else {
