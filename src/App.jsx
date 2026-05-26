@@ -986,16 +986,18 @@ export default function PresentationScriptPracticeApp() {
     if (!parsed.length) return;
     setSentenceStats([]);
     setReportElapsedSeconds(0);
+    shouldListenRef.current = autoAdvanceRef.current;
     currentSentenceStartedAtRef.current = Date.now();
     setMode("practice");
     setIsPaused(false);
     startPracticeTimer(true);
     requestWakeLock();
     startRecording();
-    setTimeout(() => startListening(), 250);
+    if (autoAdvanceRef.current) startListening();
   }
 
   function startListening() {
+    if (!autoAdvanceRef.current) return;
     if (!SpeechRecognition) {
       setSupportStatus("unsupported");
       return;
@@ -1145,7 +1147,7 @@ export default function PresentationScriptPracticeApp() {
         startPracticeTimer(false);
         currentSentenceStartedAtRef.current = Date.now();
         if (mediaRecorderRef.current && mediaRecorderRef.current.state === "paused" && typeof mediaRecorderRef.current.resume === "function") mediaRecorderRef.current.resume();
-        setTimeout(() => startListening(), 150);
+        if (autoAdvanceRef.current) startListening();
       }
       return next;
     });
