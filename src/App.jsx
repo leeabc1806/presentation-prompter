@@ -614,6 +614,13 @@ export default function PresentationScriptPracticeApp() {
   }, [currentIndex]);
 
   useEffect(() => {
+    if (mode !== "practice") return;
+    requestAnimationFrame(() => {
+      document.querySelector("[data-current-sentence='true']")?.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+  }, [currentIndex, mode]);
+
+  useEffect(() => {
     sentenceItemsRef.current = sentenceItems;
   }, [sentenceItems]);
 
@@ -1270,16 +1277,34 @@ export default function PresentationScriptPracticeApp() {
 
   function renderStageMain() {
     const mainFont = stageIsLive ? fontSize + 8 : fontSize;
+    const inactiveFont = Math.max(16, Math.round(mainFont * 0.58));
     return (
-      <AnimatePresence mode="wait">
-        <motion.section key={currentIndex} initial={{ opacity: 0, y: 20, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -20, scale: 0.98 }} transition={{ duration: 0.25 }} className={getStageCardClass(practiceTheme)}>
+      <AnimatePresence>
+        <motion.section initial={{ opacity: 0, y: 20, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -20, scale: 0.98 }} transition={{ duration: 0.25 }} className={getStageCardClass(practiceTheme)}>
           <div className="mb-5 flex flex-wrap items-center gap-2">
             <span className="rounded-full bg-yellow-300 px-3 py-1 text-xs font-black text-slate-950">{currentSection} · {sectionPosition}/{sectionTotal}</span>
             {importantMap[currentIndex] && <span className="inline-flex items-center gap-1 rounded-full bg-amber-400 px-3 py-1 text-xs font-black text-slate-950"><Star className="h-3 w-3 fill-current" /> 핵심 문장</span>}
             <span className="rounded-full bg-white/10 px-3 py-1 text-xs">권장 {currentSentenceRecommendedSeconds}초</span>
           </div>
-          <div className="tracking-[-0.02em]" style={{ fontSize: `${mainFont}px`, lineHeight }}>
-            {renderSentenceHighlight(currentSentence)}
+
+          <div className="max-h-[62vh] space-y-3 overflow-y-auto pr-1">
+            {activeItems.map((item, index) => {
+              const active = index === currentIndex;
+              const sectionChanged = index === 0 || activeItems[index - 1]?.section !== item.section;
+              return (
+                <div key={`${item.id}-${index}`}>
+                  {sectionChanged && <p className={`mb-2 text-xs font-black ${active ? "text-yellow-200" : mutedText}`}>{item.section}</p>}
+                  <motion.p
+                    data-current-sentence={active ? "true" : undefined}
+                    animate={active ? { scale: 1, opacity: 1 } : { scale: 1, opacity: 0.48 }}
+                    className={active ? "rounded-2xl bg-yellow-300/15 p-4 font-black shadow-lg shadow-yellow-500/10" : "px-2 py-1"}
+                    style={{ fontSize: `${active ? mainFont : inactiveFont}px`, lineHeight }}
+                  >
+                    {active ? renderSentenceHighlight(item.text) : item.text}
+                  </motion.p>
+                </div>
+              );
+            })}
           </div>
         </motion.section>
       </AnimatePresence>
